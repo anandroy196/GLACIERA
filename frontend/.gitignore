@@ -38,3 +38,12 @@ frontend/dist/
 
 # Other generated files
 .DS_Store
+__pycache__/
+*.py[cod]
+*.db
+.env
+venv/
+.venv/
+node_modules/
+dist/
+.vscode/

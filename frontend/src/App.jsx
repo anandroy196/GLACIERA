@@ -196,7 +196,7 @@ function Overview({ navigate, sensorData, sensorHistory = [], apiError }) {
         subtitle="Monitor environmental conditions and glacier activity."
       />
 
-      <LocationBanner />
+      <LocationBanner hasLiveData={Boolean(sensorData)} />
 
       <SectionTitle
         title="Environmental Overview"
@@ -728,16 +728,20 @@ function PageHeading({ eyebrow, title, subtitle }) {
   );
 }
 
-function LocationBanner() {
+function LocationBanner({ hasLiveData }) {
   return (
     <div className="location-banner">
-      <div className="location-image"><Mountain size={37} /></div>
+      <div className="location-image">
+        <Mountain size={37} />
+      </div>
       <div className="location-info">
         <span>MONITORING REGION</span>
         <h3>Himalayan Glacier Observatory</h3>
         <p>High-altitude environmental monitoring station</p>
       </div>
-      <div className="station-status">DEMO DATA</div>
+      <div className="station-status">
+        {hasLiveData ? "LIVE DATA" : "DEMO DATA"}
+      </div>
     </div>
   );
 }

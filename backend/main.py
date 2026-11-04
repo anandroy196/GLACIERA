@@ -7,11 +7,25 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
 from database import get_db
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="AI Glacier Melting Detection",
     description="Smart Glacier Monitoring System API",
     version="1.0.0"
+)
+app.add_middleware(
+    CORSMiddleware,
+        allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "https://glaciera-pi.vercel.app"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 class SensorInput(BaseModel):
     air_temperature: float
@@ -37,17 +51,42 @@ def health():
         "timestamp": datetime.now().isoformat()
     }
 
+
 @app.get("/api/sensors")
-def sensor_data():
+def sensor_data(db: Session = Depends(get_db)):
+    readings = (
+        db.query(models.SensorReading)
+        .order_by(models.SensorReading.id.desc())
+        .limit(50)
+        .all()
+    )
+
+    if not readings:
+        return {
+            "message": "No sensor data available",
+            "count": 0,
+            "readings": []
+        }
+
     return {
-        "air_temperature": 5.5,
-        "humidity": 65.0,
-        "water_temperature": 2.4,
-        "distance": 120.5,
-        "latitude": None,
-        "longitude": None,
-        "source": "demo_data"
+        "count": len(readings),
+        "source": "esp32_database",
+        "readings": [
+            {
+                "id": r.id,
+                "air_temperature": r.air_temperature,
+                "humidity": r.humidity,
+                "water_temperature": r.water_temperature,
+                "distance": r.distance,
+                "latitude": r.latitude,
+                "longitude": r.longitude,
+                "status": r.status,
+                "created_at": str(r.created_at)
+            }
+            for r in readings
+        ]
     }
+
 @app.post("/api/sensors")
 def save_sensor_data(
     data: SensorInput,
@@ -71,3 +110,4 @@ def save_sensor_data(
         "message": "Sensor data saved successfully!",
         "id": reading.id
     }
+

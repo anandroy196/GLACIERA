@@ -1,22 +1,48 @@
 
 import os
-import sqlite3
+import json
 import joblib
+import numpy as np
 import pandas as pd
 
 from fastapi import APIRouter, HTTPException
+from sqlalchemy import text
+
+from database import engine
 
 router = APIRouter(prefix="/api/ml", tags=["Machine Learning"])
 
-DB_PATH = "glacier.db"
 MODEL_PATH = "ml_models/environment_model.joblib"
+METRICS_PATH = "ml_models/environment_metrics.json"
+HUMIDITY_MODEL_PATH = "ml_models/humidity_experiment_model.joblib"
 
 
 def load_model():
     if not os.path.exists(MODEL_PATH):
         return None
-
     return joblib.load(MODEL_PATH)
+
+
+def get_sensor_history():
+    try:
+        query = text("""
+            SELECT id, created_at, air_temperature,
+                   humidity, water_temperature
+            FROM sensor_readings
+            ORDER BY id DESC
+            LIMIT 12
+        """)
+
+        with engine.connect() as connection:
+            df = pd.read_sql_query(query, connection)
+
+        return df.sort_values("id").reset_index(drop=True)
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Database read error: {str(error)}"
+        )
 
 
 @router.get("/status")
@@ -42,14 +68,13 @@ def model_status():
 
 @router.get("/metrics")
 def model_metrics():
-    path = "ml_models/environment_metrics.json"
+    if not os.path.exists(METRICS_PATH):
+        raise HTTPException(
+            status_code=404,
+            detail="Model metrics not found"
+        )
 
-    if not os.path.exists(path):
-        raise HTTPException(404, "Model metrics not found")
-
-    import json
-
-    with open(path, "r", encoding="utf-8") as file:
+    with open(METRICS_PATH, "r", encoding="utf-8") as file:
         return json.load(file)
 
 
@@ -58,23 +83,18 @@ def predict_next():
     artifact = load_model()
 
     if artifact is None:
-        raise HTTPException(503, "ML model is not trained")
+        raise HTTPException(
+            status_code=503,
+            detail="ML model is not trained"
+        )
 
-    conn = sqlite3.connect(DB_PATH)
-
-    df = pd.read_sql_query("""
-        SELECT air_temperature, humidity, water_temperature
-        FROM sensor_readings
-        ORDER BY id DESC
-        LIMIT 12
-    """, conn)
-
-    conn.close()
+    df = get_sensor_history()
 
     if len(df) < 12:
-        raise HTTPException(400, "Insufficient sensor history")
-
-    df = df.iloc[::-1].reset_index(drop=True)
+        raise HTTPException(
+            status_code=400,
+            detail="Insufficient sensor history. Need 12 readings."
+        )
 
     sensors = artifact["sensors"]
     lags = artifact["lags"]
@@ -82,7 +102,13 @@ def predict_next():
     features = {}
 
     for sensor in sensors:
-        values = df[sensor]
+        values = pd.to_numeric(df[sensor], errors="coerce")
+
+        if values.isna().any():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid {sensor} readings"
+            )
 
         for lag in lags:
             features[f"{sensor}_lag_{lag}"] = float(
@@ -116,7 +142,10 @@ def predict_next():
             sensor: round(float(value), 3)
             for sensor, value in zip(sensors, prediction)
         },
-        "warning": "Experimental short-term prediction. Not a 24-hour or 7-day forecast."
+        "warning": (
+            "Experimental short-term prediction. "
+            "Not a 24-hour or 7-day forecast."
+        )
     }
 
 
@@ -137,53 +166,69 @@ def forecast_status():
         }
     }
 
+
 @router.get("/predict/humidity/next")
 def predict_humidity_next():
-    import numpy as np
+    if not os.path.exists(HUMIDITY_MODEL_PATH):
+        raise HTTPException(
+            status_code=503,
+            detail="Experimental humidity model not found"
+        )
 
-    path = "ml_models/humidity_experiment_model.joblib"
+    artifact = joblib.load(HUMIDITY_MODEL_PATH)
 
-    if not os.path.exists(path):
-        raise HTTPException(503, "Experimental humidity model not found")
-
-    artifact = joblib.load(path)
-
-    conn = sqlite3.connect(DB_PATH)
-
-    df = pd.read_sql_query("""
-        SELECT created_at, air_temperature, humidity, water_temperature
-        FROM sensor_readings
-        ORDER BY id DESC
-        LIMIT 12
-    """, conn)
-
-    conn.close()
+    df = get_sensor_history()
 
     if len(df) < 12:
-        raise HTTPException(400, "Insufficient sensor history")
+        raise HTTPException(
+            status_code=400,
+            detail="Insufficient sensor history"
+        )
 
-    df = df.iloc[::-1].reset_index(drop=True)
     df["created_at"] = pd.to_datetime(df["created_at"])
 
-    sensors = ["humidity", "air_temperature", "water_temperature"]
+    sensors = [
+        "humidity",
+        "air_temperature",
+        "water_temperature"
+    ]
+
     features = {}
 
     for sensor in sensors:
         values = pd.to_numeric(df[sensor], errors="coerce")
 
         if values.isna().any():
-            raise HTTPException(400, f"Invalid {sensor} readings")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid {sensor} readings"
+            )
 
         for lag in [1, 2, 3, 6, 12]:
-            features[f"{sensor}_lag_{lag}"] = float(values.iloc[-lag])
+            features[f"{sensor}_lag_{lag}"] = float(
+                values.iloc[-lag]
+            )
 
-        features[f"{sensor}_rolling_mean"] = float(values.tail(6).mean())
-        features[f"{sensor}_rolling_std"] = float(values.tail(6).std())
+        features[f"{sensor}_rolling_mean"] = float(
+            values.tail(6).mean()
+        )
 
-    intervals = df["created_at"].diff().dt.total_seconds().dropna()
-    interval = float(intervals.median()) if len(intervals) else 10
+        features[f"{sensor}_rolling_std"] = float(
+            values.tail(6).std()
+        )
 
-    next_time = df["created_at"].iloc[-1] + pd.Timedelta(seconds=interval)
+    intervals = (
+        df["created_at"].diff().dt.total_seconds().dropna()
+    )
+
+    interval = (
+        float(intervals.median()) if len(intervals) else 10
+    )
+
+    next_time = (
+        df["created_at"].iloc[-1]
+        + pd.Timedelta(seconds=interval)
+    )
 
     features["hour"] = int(next_time.hour)
     features["minute"] = int(next_time.minute)
@@ -193,7 +238,10 @@ def predict_humidity_next():
         columns=artifact["features"]
     )
 
-    prediction = float(artifact["model"].predict(input_df)[0])
+    prediction = float(
+        artifact["model"].predict(input_df)[0]
+    )
+
     prediction = float(np.clip(prediction, 0, 100))
 
     return {
@@ -202,5 +250,8 @@ def predict_humidity_next():
         "predicted_humidity": round(prediction, 2),
         "forecast_horizon": "next_sensor_observation",
         "records_used": artifact["records_used"],
-        "warning": "Experimental prediction. Not a validated long-term humidity forecast."
+        "warning": (
+            "Experimental prediction. "
+            "Not a validated long-term humidity forecast."
+        )
     }

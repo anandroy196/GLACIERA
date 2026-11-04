@@ -1,0 +1,24 @@
+{
+  "best_model": "ExtraTrees",
+  "results": {
+    "Persistence": {
+      "MAE": 0.17265625000000004,
+      "RMSE": 0.27286099941178843,
+      "R2": 0.8358223173055658
+    },
+    "ExtraTrees": {
+      "MAE": 0.19798862637892176,
+      "RMSE": 0.2741931968443088,
+      "R2": 0.8342152645400215
+    },
+    "RandomForest": {
+      "MAE": 0.25636886979244417,
+      "RMSE": 0.3379188026417096,
+      "R2": 0.7481998956076095
+    }
+  },
+  "records_used": 1918,
+  "training_samples": 1534,
+  "testing_samples": 384,
+  "excluded_zero_humidity": true
+}

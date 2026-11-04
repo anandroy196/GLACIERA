@@ -41,6 +41,12 @@ function App() {
   const [sensorData, setSensorData] = useState(null);  
   const [sensorHistory, setSensorHistory] = useState([]);
   const [apiError, setApiError] = useState("");
+  const [mlStatus, setMlStatus] = useState(null);
+  const [mlPrediction, setMlPrediction] = useState(null);
+  const [mlMetrics, setMlMetrics] = useState(null);
+  const [forecastInfo, setForecastInfo] = useState(null);
+  const [mlError, setMlError] = useState("");
+  const [humidityPrediction, setHumidityPrediction] = useState(null);
 
 useEffect(() => {
   const fetchSensorData = async () => {
@@ -72,6 +78,75 @@ useEffect(() => {
   return () => clearInterval(interval);
 }, []);
 
+useEffect(() => {
+  let mounted = true;
+
+  
+const fetchMLData = async () => {
+  try {
+    const [
+      statusRes,
+      predictionRes,
+      metricsRes,
+      forecastRes,
+      humidityRes
+    ] = await Promise.all([
+      fetch(`${API_URL}/api/ml/status`),
+      fetch(`${API_URL}/api/ml/predict/next`),
+      fetch(`${API_URL}/api/ml/metrics`),
+      fetch(`${API_URL}/api/ml/forecast`),
+      fetch(`${API_URL}/api/ml/predict/humidity/next`)
+    ]);
+
+    if (
+      !statusRes.ok ||
+      !predictionRes.ok ||
+      !metricsRes.ok ||
+      !forecastRes.ok ||
+      !humidityRes.ok
+    ) {
+      throw new Error("One or more ML APIs unavailable");
+    }
+
+    const [
+      status,
+      prediction,
+      metrics,
+      forecast,
+      humidityData
+    ] = await Promise.all([
+      statusRes.json(),
+      predictionRes.json(),
+      metricsRes.json(),
+      forecastRes.json(),
+      humidityRes.json()
+    ]);
+
+    if (mounted) {
+      setMlStatus(status);
+      setMlPrediction(prediction);
+      setMlMetrics(metrics);
+      setForecastInfo(forecast);
+      setHumidityPrediction(humidityData);
+      setMlError("");
+    }
+
+  } catch (error) {
+    if (mounted) {
+      setMlError(error.message);
+    }
+  }
+};
+
+fetchMLData();
+
+const interval = setInterval(fetchMLData, 15000);
+
+return () => {
+  mounted = false;
+  clearInterval(interval);
+};
+}, []);
 
   const navigate = (page) => {
     setActive(page);
@@ -173,7 +248,17 @@ useEffect(() => {
           />
         )}
         {active === "Glacier Map" && <GlacierMap />}
-        {active === "AI Prediction" && <Prediction />}
+        {active === "AI Prediction" && (
+          <Prediction
+            mlStatus={mlStatus}
+            mlPrediction={mlPrediction}
+            mlMetrics={mlMetrics}
+            forecastInfo={forecastInfo}
+            humidityPrediction={humidityPrediction}
+            mlError={mlError}
+            sensorHistory={sensorHistory}
+          />
+        )}
         {active === "Historical Data" && (
           <HistoricalData sensorHistory={sensorHistory} />
         )}
@@ -487,89 +572,170 @@ function GlacierMap({ sensorData }) {
 
 /* AI PREDICTION */
 
-function Prediction({ sensorHistory = [], apiError }) {
-  const valid = sensorHistory.filter(r => Number.isFinite(Number(r.air_temperature)));
-  const latest = valid[0];
-  const previous = valid.length > 1 ? valid[1] : null;
-  const temp = latest ? Number(latest.air_temperature) : null;
-  const humidity = latest && latest.humidity != null ? Number(latest.humidity) : null;
-  const water = latest && latest.water_temperature != null ? Number(latest.water_temperature) : null;
-  const delta = latest && previous ? temp - Number(previous.air_temperature) : 0;
-  const trend = !latest ? "Unavailable" : delta > 0.2 ? "Rising" : delta < -0.2 ? "Falling" : "Stable";
 
-  // Transparent rule-based prototype score; not a trained or validated glacier model.
-  const score = latest
-    ? Math.max(0, Math.min(100,
-        Math.round(
-          Math.max(0, temp) * 4 +
-          Math.max(0, (humidity ?? 0) - 60) * 0.35 +
-          Math.max(0, water ?? 0) * 2 +
-          Math.max(0, delta) * 8
-        )))
-    : null;
+function Prediction({
+  mlStatus,
+  mlPrediction,
+  mlMetrics,
+  forecastInfo,
+  humidityPrediction,
+  mlError,
+  sensorHistory = []
+}) {
+  const predictions = mlPrediction?.predictions;
+  const humidityValue = humidityPrediction?.predicted_humidity;
 
-  const level = score == null ? "NO DATA" : score >= 65 ? "HIGH INDICATOR" : score >= 30 ? "MODERATE INDICATOR" : "LOW INDICATOR";
-  const advice = !latest
-    ? "Connect the ESP32 and collect sensor readings to generate a rule-based indicator."
-    : score >= 65
-      ? "Review rising temperature and water-temperature readings. Verify sensors and inspect the site."
-      : score >= 30
-        ? "Continue monitoring trends and compare readings across multiple observation periods."
-        : "Continue routine monitoring. A low indicator does not confirm that the glacier is safe.";
+  const forecastCard = (key, label) => {
+    const item = forecastInfo?.[key];
+
+    return (
+      <div className="device-row" key={key}>
+        <strong>{label}</strong>
+        <span className={item?.available ? "chart-tag" : "pending"}>
+          {item?.available ? "Available" : "Not validated"}
+        </span>
+      </div>
+    );
+  };
 
   return (
     <section className="dashboard">
       <PageHeading
         eyebrow="CLIMATE INTELLIGENCE ENGINE"
         title="AI Prediction"
-        subtitle="Live-data-based, rule-driven glacier condition indicator."
+        subtitle="Machine learning predictions from actual ESP32 observations."
       />
+
       <div className="demo-notice">
-        PROTOTYPE ANALYTICS — This transparent rule-based indicator is not a trained or scientifically validated glacier-melt prediction model.
-        {apiError ? ` Backend: ${apiError}` : ""}
+        {mlError
+          ? `ML API Error: ${mlError}`
+          : mlStatus?.model_available
+            ? "TRAINED ML MODEL CONNECTED"
+            : "Waiting for ML model..."}
       </div>
+
       <div className="metrics-grid">
-        <Metric icon={<TrendingUp />} label="Risk Indicator" value={score == null ? "--" : score} unit="/100" trend={level} />
-        <Metric icon={<Thermometer />} label="Air Temperature Trend" value={trend} unit="" trend="Latest vs previous reading" />
-        <Metric icon={<Droplets />} label="Humidity" value={humidity == null ? "--" : humidity.toFixed(1)} unit="%" trend="Latest sensor reading" />
-        <Metric icon={<Waves />} label="Water Temperature" value={water == null ? "--" : water.toFixed(1)} unit="°C" trend="Latest sensor reading" />
+        <Metric
+          icon={<Cpu />}
+          label="ML Model"
+          value={mlStatus?.model_available ? "ONLINE" : "OFFLINE"}
+          unit=""
+          trend="Extra Trees Regressor"
+        />
+
+        <Metric
+          icon={<Thermometer />}
+          label="Predicted Air Temperature"
+          value={predictions?.air_temperature?.toFixed(2) ?? "--"}
+          unit="°C"
+          trend="Next observation"
+        />
+
+        <Metric
+          icon={<Droplets />}
+          label="Predicted Humidity"
+          value={predictions?.humidity?.toFixed(2) ?? "--"}
+          unit="%"
+          trend="Next observation"
+        />
+
+        <Metric
+          icon={<Waves />}
+          label="Predicted Water Temperature"
+          value={predictions?.water_temperature?.toFixed(2) ?? "--"}
+          unit="°C"
+          trend="Next observation"
+        />
       </div>
+
       <div className="content-grid">
         <div className="panel">
           <div className="panel-heading">
-            <div><h3>Current Risk Indicator</h3><p>Calculated from the latest available sensor readings</p></div>
-            <span className="chart-tag">{level}</span>
+            <div>
+              <h3>Model Performance</h3>
+              <p>Chronological test dataset evaluation</p>
+            </div>
+            <span className="chart-tag">ML METRICS</span>
           </div>
-          <div className="risk-score">{score == null ? "--" : score}<span>/100</span></div>
-          <div className="risk-level">{level}</div>
-          <div className="risk-bar"><span style={{ width: `${score ?? 0}%` }} /></div>
-          <p className="risk-description">{advice}</p>
-          <p className="risk-description">Inputs: air temperature, humidity, water temperature and change from the previous air-temperature reading.</p>
+
+          {["air_temperature", "humidity", "water_temperature"].map(
+            (sensor) => (
+              <div className="device-row" key={sensor}>
+                <strong>{sensor.replaceAll("_", " ").toUpperCase()}</strong>
+                <span>
+                  MAE: {mlMetrics?.[sensor]?.MAE ?? "--"} |
+                  RMSE: {mlMetrics?.[sensor]?.RMSE ?? "--"} |
+                  R²: {mlMetrics?.[sensor]?.R2 ?? "--"}
+                </span>
+              </div>
+            )
+          )}
         </div>
+
         <div className="panel">
           <div className="panel-heading">
-            <div><h3>Analysis Pipeline</h3><p>Live prototype processing status</p></div>
-          </div>
-          {[
-            ["Sensor data collection", latest ? "Available" : "Waiting"],
-            ["Data quality validation", valid.length ? "Readings received" : "Waiting"],
-            ["Feature extraction", latest ? "Calculated" : "Waiting"],
-            ["Rule-based indicator", score == null ? "Waiting" : "Calculated"],
-            ["Scientific ML validation", "Not trained"]
-          ].map(([item, status], i) => (
-            <div className="device-row" key={item}>
-              <strong>{i + 1}. {item}</strong>
-              <span className={status === "Not trained" || status === "Waiting" ? "pending" : "chart-tag"}>{status}</span>
+            <div>
+              <h3>Training Information</h3>
+              <p>Real ESP32 database records</p>
             </div>
-          ))}
+          </div>
+
+          <div className="device-row">
+            <strong>Model status</strong>
+            <span>{mlStatus?.model_available ? "Trained" : "Unavailable"}</span>
+          </div>
+
+          <div className="device-row">
+            <strong>Training records</strong>
+            <span>{mlStatus?.trained_records ?? "--"}</span>
+          </div>
+
+          <div className="device-row">
+            <strong>Training samples</strong>
+            <span>{mlStatus?.training_samples ?? "--"}</span>
+          </div>
+
+          <div className="device-row">
+            <strong>Testing samples</strong>
+            <span>{mlStatus?.testing_samples ?? "--"}</span>
+          </div>
         </div>
       </div>
+
+      <div className="panel">
+        <div className="panel-heading">
+          <div>
+            <h3>Forecast Availability</h3>
+            <p>Forecasts require sufficient historical data and validation.</p>
+          </div>
+        </div>
+
+        {forecastCard("24_hour", "24-Hour Forecast")}
+        {forecastCard("7_day", "7-Day Forecast")}
+        {forecastCard("glacier_melt", "Glacier Melt Prediction")}
+
+        <p className="risk-description">
+          {forecastInfo?.glacier_melt?.reason ||
+            "Real glacier mass-balance training data is required."}
+        </p>
+      </div>
+
       <div className="panel table-panel">
         <div className="panel-heading">
-          <div><h3>Recent Analysis Inputs</h3><p>Latest stored ESP32 observations</p></div>
+          <div>
+            <h3>Recent Sensor Inputs</h3>
+            <p>Actual ESP32 observations</p>
+          </div>
         </div>
+
         <ObservationTable sensorHistory={sensorHistory.slice(0, 10)} />
       </div>
+
+      <div className="demo-notice">
+        These are experimental next-reading predictions, not validated
+        24-hour or 7-day forecasts or measured glacier melt rates.
+      </div>
+
       <Footer />
     </section>
   );

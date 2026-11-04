@@ -1,0 +1,17 @@
+{
+    "air_temperature": {
+        "MAE": 0.1146,
+        "RMSE": 0.1338,
+        "R2": 0.7619
+    },
+    "humidity": {
+        "MAE": 0.9259,
+        "RMSE": 0.9978,
+        "R2": -1.758
+    },
+    "water_temperature": {
+        "MAE": 0.0533,
+        "RMSE": 0.0639,
+        "R2": 0.9346
+    }
+}

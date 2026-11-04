@@ -1,3 +1,4 @@
+from ml_api import router as ml_router
 from database import engine, Base
 import models
 from fastapi import FastAPI
@@ -110,4 +111,4 @@ def save_sensor_data(
         "message": "Sensor data saved successfully!",
         "id": reading.id
     }
-
+app.include_router(ml_router)

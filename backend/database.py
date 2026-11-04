@@ -1,12 +1,31 @@
+import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-DATABASE_URL = "sqlite:///./glacier.db"
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./glacier.db")
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False}
-)
+# Neon PostgreSQL URL compatibility
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace(
+        "postgres://", "postgresql+psycopg://", 1
+    )
+elif DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace(
+        "postgresql://", "postgresql+psycopg://", 1
+    )
+
+# Database engine
+if DATABASE_URL.startswith("sqlite"):
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={"check_same_thread": False}
+    )
+else:
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,
+        pool_recycle=300
+    )
 
 SessionLocal = sessionmaker(
     autocommit=False,
@@ -15,6 +34,7 @@ SessionLocal = sessionmaker(
 )
 
 Base = declarative_base()
+
 
 def get_db():
     db = SessionLocal()
